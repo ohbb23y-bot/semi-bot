@@ -10,9 +10,9 @@ from datetime import date, datetime, timedelta
 
 from .sources import naver
 
-from . import macro, news, state, telegram
+from . import analyst, macro, news, state, telegram
 from .config import kst_now, universe
-from .fmt import article_line
+from .fmt import article_block
 
 
 def pct(v) -> str:
@@ -95,8 +95,8 @@ def build(b: dict, mac: list[dict], arts: list[dict]) -> list[str]:
                   "둘 다 오르면 업턴.</i>")
 
     if arts:
-        blocks.append("<b>📰 오늘의 주요 기사</b>\n<blockquote>"
-                      + "\n\n".join(article_line(n) for n in arts) + "</blockquote>")
+        blocks.append("<b>📰 오늘의 주요 기사</b>")
+        blocks += [article_block(n, n.get("info")) for n in arts]
     return blocks
 
 
@@ -117,7 +117,10 @@ def run(dry: bool = False) -> int:
             if (n.get("datetime") or "").startswith(today)]
     # 낮에 30분 감시가 이미 보낸 기사는 다시 보내지 않는다
     pool = news.seen_filter(pool, list(st.get("news_seen") or []))
-    arts = news.pick(pool, 4, names=set(universe().values()))
+    names = set(universe().values())
+    arts = news.pick(pool, 4, names=names)
+    for n in arts:
+        n["info"] = analyst.enrich(n, names)
 
     blocks = build(b, mac, arts)
     if dry:

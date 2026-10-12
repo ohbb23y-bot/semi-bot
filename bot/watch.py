@@ -13,11 +13,11 @@ import argparse
 import time
 from datetime import datetime, time as dtime
 
-from . import body, contract, earnings, gitsync, news, state, summary, telegram
+from . import analyst, body, contract, earnings, gitsync, news, state, summary, telegram
 from .classify import ORDER, sort_key
 from .config import kst_now, universe
 from .feed import collect
-from .fmt import article_line, link, short_title
+from .fmt import article_block, link, short_title
 from .telegram import esc
 
 MAX_ITEMS = 40                # 한 번에 이보다 많으면 줄인다
@@ -81,11 +81,6 @@ def digest_message(rows: list[dict], part: int = 0) -> str:
             + "\n\n".join(parts) + "</blockquote>")
 
 
-def news_message(arts: list[dict]) -> str:
-    return (f"<b>📰 주요 기사</b>\n<blockquote>"
-            + "\n\n".join(article_line(n) for n in arts) + "</blockquote>")
-
-
 def build(items: list[dict], arts: list[dict]) -> list[tuple[str, list[dict]]]:
     """(메시지 본문, 그 메시지에 담긴 공시들) 목록. 순서대로 보낸다."""
     out: list[tuple[str, list[dict]]] = []
@@ -109,8 +104,8 @@ def build(items: list[dict], arts: list[dict]) -> list[tuple[str, list[dict]]]:
     for p, i in enumerate(range(0, len(small), DIGEST_PER_MSG)):
         chunk = small[i:i + DIGEST_PER_MSG]
         out.append((digest_message(chunk, p), chunk))
-    if arts:
-        out.append((news_message(arts), []))
+    for n in arts:                       # 기사는 한 건에 메시지 한 통
+        out.append((article_block(n, n.get("info")), []))
     return out
 
 
@@ -189,7 +184,10 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
     if not a.no_news:
         pool = news.seen_filter(news.fresh(news.sector(limit=40), NEWS_WITHIN_MIN),
                                 list(st.get("news_seen") or []))
-        arts = news.pick(pool, NEWS_MAX, names=set(universe().values()))
+        names = set(universe().values())
+        arts = news.pick(pool, NEWS_MAX, names=names)
+        for n in arts:                   # 본문을 읽어 내용·분석을 붙인다
+            n["info"] = analyst.enrich(n, names)
 
     msgs = build(trimmed, arts)
 

@@ -48,3 +48,21 @@ def article_line(n: dict) -> str:
     tail = f"<i>{press}</i> · " if press else ""
     return (f"<b>{esc(n['title'][:80])}</b>\n"
             f"{tail}{link(n['url'], '기사')}")
+
+
+def article_block(n: dict, info: dict | None = None) -> str:
+    """제목 · 내용 · 분석 · 링크. 본문을 못 읽었으면 제목과 링크만."""
+    info = info or {}
+    rows = []
+    if info.get("summary"):
+        rows.append(f"<b>내용</b>  {esc(info['summary'])}")
+    if info.get("analysis"):
+        rows.append(f"<b>분석</b>  {esc(info['analysis'])}")
+    elif info.get("tags"):
+        rows.append("<b>키워드</b>  " + " · ".join(esc(t) for t in info["tags"]))
+    if info.get("related"):
+        rows.append("<b>관련</b>  " + " · ".join(esc(t) for t in info["related"]))
+    quote = "\n<blockquote>" + "\n".join(rows) + "</blockquote>" if rows else ""
+    press = esc(n.get("press") or "")
+    foot = (f"<i>{press}</i> · " if press else "") + link(n["url"], "기사 원문")
+    return f"<b>📰 {esc((n.get('title') or '')[:90])}</b>{quote}\n{foot}"

@@ -5,6 +5,7 @@
 #   ECOS_API_KEY        https://ecos.bok.or.kr  (업황 지표용)
 #   TELEGRAM_BOT_TOKEN  @BotFather 에서 /newbot
 #   TELEGRAM_CHAT_ID    채널이면 @채널이름, 개인이면 숫자
+#   ANTHROPIC_API_KEY   (선택) 기사 '분석'을 Claude 가 쓴다. 없으면 키워드·관련 종목만 보여준다
 #
 # 동작
 #   예약 실행은 가장 짧아도 5분 간격이고 시작도 늦는다. 그래서 짧게 자주 돌리지 않고,
@@ -61,6 +62,7 @@ jobs:
           ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # 선택. 있으면 기사 요약·분석을 Claude 가 쓴다
           MODE: ${{ inputs.mode }}
           MINUTES: ${{ inputs.minutes }}
           CRON: ${{ github.event.schedule }}
