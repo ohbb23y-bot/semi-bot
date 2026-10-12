@@ -115,8 +115,14 @@ def related_of(text: str, names: set[str]) -> list[str]:
 def _prompt(title: str, body: str) -> str:
     return (
         "다음 기사를 읽고 JSON 객체 하나로만 답하라. 다른 글은 쓰지 말라.\n"
-        '{"summary": "기사 핵심 2문장, 130자 이내",\n'
-        ' "analysis": "반도체 업황과 관련 종목에 어떤 의미인지 2문장, 150자 이내"}\n\n'
+        '{"points": ["핵심 1", "핵심 2", "핵심 3"],\n'
+        ' "analysis": ["시사점 1", "시사점 2"]}\n\n'
+        "내용:\n"
+        "- points: 기사의 핵심 사실 3개. 숫자와 고유명사를 살리고 각 70자 이내.\n"
+        "- analysis: 반도체 업황과 관련 종목에 어떤 의미인지 2개. 각 80자 이내.\n\n"
+        "문체(개조식): 서술형(~다, ~합니다)으로 끝내지 말고 명사형으로 끝낸다.\n"
+        "예) '3분기 영업이익 1300억 원 전망', 'SK하이닉스와 442억 원 규모 공급계약 체결',\n"
+        "    'HBM4 전환에 따른 TC 본더 수요 회복 가능성', '메모리 가격 상승 지속 전망'\n\n"
         "규칙:\n"
         "- 기사에 있는 내용만 근거로 쓴다. 기사에 없는 숫자나 사실을 만들지 않는다.\n"
         "- 확실하지 않은 영향은 '가능성', '전망' 같은 말로 쓴다.\n"
@@ -127,17 +133,26 @@ def _prompt(title: str, body: str) -> str:
     )
 
 
+def _as_list(v) -> list[str]:
+    if isinstance(v, str):
+        v = [x for x in re.split(r"[\n]+|(?<=[다음임])\.\s+", v) if x.strip()]
+    return [str(x).strip() for x in (v or []) if str(x).strip()]
+
+
 def _parse(text: str) -> dict | None:
-    """모델 답에서 JSON 을 꺼내 요약·분석을 돌려준다. 하나라도 비면 None."""
+    """모델 답에서 JSON 을 꺼낸다. 핵심·분석 중 하나라도 비면 None."""
     try:
         m = re.search(r"\{.*\}", text, re.S)
         d = json.loads(m.group(0)) if m else {}
     except Exception:                                      # noqa: BLE001
         return None
-    s, a = str(d.get("summary") or "").strip(), str(d.get("analysis") or "").strip()
-    if not s or not a:
+    pts = _as_list(d.get("points") or d.get("summary"))[:3]
+    ana = _as_list(d.get("analysis"))[:2]
+    if not pts or not ana:
         return None
-    return {"summary": s[:200], "analysis": a[:220]}
+    # 모델이 문체 지시를 놓쳐도 어미를 한 번 더 다듬는다
+    return {"points": [noun_style(p)[:90] for p in pts],
+            "analysis": "\n".join(noun_style(a)[:100] for a in ana)}
 
 
 def _gemini(prompt: str, key: str) -> dict | None:
@@ -207,6 +222,43 @@ def _llm(title: str, body: str) -> dict | None:
     return None
 
 
+# ── 개조식(명사형 종결) ───────────────────────────────────────────
+# 뉴스 속보·리포트 요약처럼 '~전망', '~체결', '~원' 으로 끝내 짧게 읽히게 한다.
+# 어미를 바꿔도 뜻이 달라지지 않는 것만 다룬다. 모르는 어미는 그대로 두고 마침표만 뗀다.
+_ENDINGS = [
+    # (패턴, 바꿀 말) — 위에서부터 먼저 맞는 것
+    (r"것으로\s*(전망|예상|관측|분석|추정|기대)(된다|됩니다|되었다|됐다|된다는)", r"것으로 \1"),
+    (r"(가능성|우려|필요|여지|위험|부담)(이|가|도)?\s*(있다|있습니다|크다|높다|제기된다|제기됐다)", r"\1"),
+    (r"것으로\s*(보인다|보입니다|보이며)", "것으로 보임"),
+    (r"(전망|예정|계획|방침|가능성|우려|기대|예상)(이다|입니다|이며|이라고)", r"\1"),
+    (r"(전망|예상|기대|우려|분석|풀이|추정|관측)(된다|됩니다|되었다|됐다|됩니다)", r"\1"),
+    (r"밝혔(다|습니다)", "밝힘"),
+    (r"알려졌(다|습니다)", "알려짐"),
+    (r"나타났(다|습니다)", "나타남"),
+    (r"나왔(다|습니다)", "나옴"),
+    (r"이어졌(다|습니다)", "이어짐"),
+    (r"늘었(다|습니다)", "증가"),
+    (r"줄었(다|습니다)", "감소"),
+    (r"올랐(다|습니다)", "상승"),
+    (r"떨어졌(다|습니다)", "하락"),
+    (r"(\S+?)(했|하였)(다|습니다)", r"\1"),
+    (r"(\S+?)(됐|되었)(다|습니다)", r"\1"),
+    (r"(\S+?)(한다|합니다|된다|됩니다)", r"\1"),
+    (r"(\S)(이다|입니다)", r"\1"),
+]
+
+
+def noun_style(s: str) -> str:
+    """문장 끝을 명사형으로. '…거둘 전망이다.' → '…거둘 전망'"""
+    s = re.sub(r"[\s.。]+$", "", (s or "").strip())
+    s = re.sub(r"[\"'”’]+$", lambda m: m.group(0), s)
+    for pat, rep in _ENDINGS:
+        new, k = re.subn(pat + r"$", rep, s)
+        if k:
+            return new.strip()
+    return s
+
+
 _SENT_SPLIT = re.compile(r"(?<=[다요]\.)\s+|(?<=[?!])\s+")
 _NOISE_SENT = re.compile(r"기자|사진|연합뉴스|구독|좋아요|\[[^\]]*\]$|▶|☞")
 _NUM = re.compile(r"\d")
@@ -264,6 +316,7 @@ def key_points(title: str, body: str, names: set[str], n: int = 3, maxlen: int =
         s = re.sub(r"\(\d{6}\)", "", s)                     # 종목코드 괄호 같은 군더더기
         s = re.sub(r"^[-·•▶▷\s]+", "", s)                   # 목록 기호
         s = re.sub(r"\s+", " ", s).strip()
+        s = noun_style(s)
         if len(s) > maxlen:
             cut = s[:maxlen]
             k = max(cut.rfind(", "), cut.rfind("，"))
@@ -290,7 +343,7 @@ def enrich(n: dict, names: set[str]) -> dict:
             "related": related_of(text, names), "engine": "rule"}
     out = _llm(title, body)
     if out:
-        info["points"] = _sentences(out["summary"])[:3]
+        info["points"] = out["points"]
         info["analysis"] = out["analysis"]
         info["engine"] = out.get("engine", "ai")
     else:

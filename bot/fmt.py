@@ -63,7 +63,8 @@ def article_block(n: dict, info: dict | None = None) -> str:
     if points:
         parts.append("<b>💡 핵심</b>\n" + "\n".join(f"• {esc(p)}" for p in points))
     if info.get("analysis"):
-        parts.append(f"<b>🔎 분석</b>\n{esc(info['analysis'])}")
+        lines = [x for x in info["analysis"].split("\n") if x.strip()]
+        parts.append("<b>🔎 분석</b>\n" + "\n".join(f"• {esc(x)}" for x in lines))
     elif info.get("tags"):
         parts.append("<b>🏷 키워드</b>  " + " · ".join(esc(t) for t in info["tags"]))
     if info.get("related"):
