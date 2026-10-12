@@ -1,0 +1,8 @@
+# 비밀값은 절대 올리지 않는다
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.pyc
+.venv/

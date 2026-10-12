@@ -1,0 +1,90 @@
+# 반도체 봇 — 공시가 뜨는 대로 텔레그램으로 보낸다
+#
+# 준비 (한 번만): 저장소 Settings → Secrets and variables → Actions 에 네 개를 넣는다.
+#   DART_API_KEY        https://opendart.fss.or.kr
+#   ECOS_API_KEY        https://ecos.bok.or.kr  (업황 지표용)
+#   TELEGRAM_BOT_TOKEN  @BotFather 에서 /newbot
+#   TELEGRAM_CHAT_ID    채널이면 @채널이름, 개인이면 숫자
+#
+# 동작
+#   예약 실행은 가장 짧아도 5분 간격이고 시작도 늦는다. 그래서 짧게 자주 돌리지 않고,
+#   한 번 시작하면 몇 시간 동안 60초마다 새 공시를 확인하는 작업을 이어 붙인다.
+#   (--loop 는 평일 07:00~20:30 KST 에만 확인하고, 18:30 이후 데일리를 한 번 보낸다.)
+#
+#     KST 06:55 → 약 12:35   /   12:30 → 약 18:15   /   18:10 → 약 20:35
+#
+#   concurrency 가 앞 작업이 끝날 때까지 다음 작업을 기다리게 한다.
+#   보낸 기록(bot/state.json)은 5분마다 저장소에 올라가, 작업이 끊겨도 같은 공시를 다시 보내지 않는다.
+
+name: 반도체 봇
+
+on:
+  schedule:
+    - cron: "55 21 * * 0-4"   # KST 월~금 06:55  (UTC 일~목 21:55)
+    - cron: "30 3 * * 1-5"    # KST 월~금 12:30
+    - cron: "10 9 * * 1-5"    # KST 월~금 18:10
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "once(한 번 확인) / daily(업황 리포트) / loop(계속 확인)"
+        default: once
+        type: choice
+        options: [once, daily, loop]
+      minutes:
+        description: "loop 일 때 몇 분 동안 돌까"
+        default: "10"
+
+concurrency:
+  group: semi-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    permissions:
+      contents: write          # 보낸 기록을 커밋한다
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: 실행
+        env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MODE: ${{ inputs.mode }}
+          MINUTES: ${{ inputs.minutes }}
+          CRON: ${{ github.event.schedule }}
+          TZ: Asia/Seoul
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 시크릿이 없습니다."
+            exit 1
+          fi
+          # 월요일 첫 확인에서는 주말 사이 공시까지 본다
+          DAYS=1
+          [ "$(date +%u)" = "1" ] && DAYS=4
+
+          case "$MODE" in
+            daily) python -m bot.daily ;;
+            once)  python -m bot.watch --days "$DAYS" ;;
+            loop)  python -m bot.watch --loop --every 60 --days "$DAYS" --max-minutes "${MINUTES:-10}" ;;
+            *)
+              # 예약 실행: 마지막 작업(18:10)은 20:35 까지만, 나머지는 약 5시간 40분
+              if [ "$CRON" = "10 9 * * 1-5" ]; then MAXMIN=140; else MAXMIN=340; fi
+              python -m bot.watch --loop --every 60 --days "$DAYS" --max-minutes "$MAXMIN"
+              ;;
+          esac
+
+      - name: 보낸 기록 저장
+        if: always()
+        run: python -m bot.gitsync
