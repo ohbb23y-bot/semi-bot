@@ -28,8 +28,10 @@ def _num(s: str) -> float | None:
 
 
 def _idx(c: list[str], label: str, start: int = 0) -> int:
+    """라벨이 있는 칸의 위치. 서식마다 띄어쓰기가 달라서 공백은 무시하고 비교한다."""
+    key = label.replace(" ", "")
     for i in range(start, len(c)):
-        if c[i] == label:
+        if c[i] == label or c[i].replace(" ", "") == key:
             return i
     return -1
 
@@ -391,14 +393,27 @@ def freetext(c: list[str], title: str) -> list[str]:
     return []
 
 
+def _pretty(v: str) -> str:
+    """정정표 값 정리: '-. 12,000,000,000 -. 15,031,589,000' → '120억원 / 150.3억원'."""
+    out = []
+    for tok in [t for t in re.split(r"(?:^|\s)-\.\s*", v) if t.strip()] or [v]:
+        t = tok.strip()
+        n = _num(t)
+        if n is not None and abs(n) >= 1e8 and re.fullmatch(r"-?[\d,]+", t):
+            out.append(_won(n))
+        else:
+            out.append(t)
+    return " / ".join(out)
+
+
 def correction(c: list[str], title: str) -> list[str]:
     """정정 공시: 사유와 바뀐 항목(전 → 후)."""
     def sq(s: str) -> str:
         return re.sub(r"\s+", "", s)
 
     def label(lb: str) -> str:
-        lb = re.sub(r"^[\d.\s]+", "", lb)
-        return lb.split("-")[-1].strip() if "-" in lb[:30] else lb
+        lb = re.sub(r"^[\d.\s]+", "", lb)                   # 앞의 번호
+        return re.sub(r"\s+-\s+", " · ", lb).strip()          # '신주의 종류와 수 - 보통주식(주)'
 
     i = next((k for k, x in enumerate(c) if sq(x) == "정정후"), -1)
     out: list[str] = []
@@ -417,7 +432,7 @@ def correction(c: list[str], title: str) -> list[str]:
     rows: list[list[str]] = []
     for x in c[i + 1:]:
         if head.match(x):
-            if x.startswith(tuple(f"{n}. 기타" for n in range(1, 15))):
+            if re.match(r"^\d+\. 기타", x):
                 break
             rows.append([x])
         elif rows:
@@ -435,9 +450,10 @@ def correction(c: list[str], title: str) -> list[str]:
             was, now = vals[-2], vals[-1]
             if has_reason_col and len(vals) >= 3 and vals[0] not in ("-", ""):
                 why = f" — {esc(_clean(vals[0], 30))}"
-        if len(was) > 40 or len(now) > 40:
+        was, now = _pretty(was), _pretty(now)
+        if len(was) > 50 or len(now) > 50:
             continue
-        out.append(f"{esc(_clean(label(lb), 30))} {esc(was)} → {esc(now)}{why}")
+        out.append(f"{esc(_clean(label(lb), 40))}  {esc(was)} → {esc(now)}{why}")
     return out
 
 
