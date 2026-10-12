@@ -57,7 +57,8 @@ def article_block(n: dict, info: dict | None = None) -> str:
     항목 사이를 한 줄씩 띄운다.
     """
     info = info or {}
-    parts = [f"<b>📰 {esc((n.get('title') or '')[:90])}</b>"]
+    title = (info.get("title") or n.get("title") or "")
+    parts = [f"<b>📰 {esc(title[:150])}</b>"]
 
     points = info.get("points") or ([info["summary"]] if info.get("summary") else [])
     if points:

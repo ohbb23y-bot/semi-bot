@@ -37,20 +37,42 @@ TAGS = [
 ]
 
 
-def fetch_body(url: str, limit: int = 3500) -> str:
-    """네이버 뉴스 본문. 못 받으면 빈 문자열."""
+def fetch_article(url: str, limit: int = 3500) -> dict:
+    """네이버 뉴스 한 건: 전체 제목, 편집자 요약 소제목, 본문.
+
+    목록(API)의 제목은 길면 '…' 로 잘려 있다. 기사 페이지의 og:title 이 전체 제목이다.
+    기사 맨 위의 <strong class="media_end_summary"> 는 편집자가 쓴 요약 소제목이다.
+    본문에 섞어 두면 소제목과 첫 문장이 붙어 버리므로 따로 뗀다.
+    """
+    out = {"title": "", "summary": [], "body": ""}
     try:
         r = client("naver").get(url, timeout=20)
         r.raise_for_status()
     except Exception:                                      # noqa: BLE001
-        return ""
-    m = re.search(r'<article[^>]*id="dic_area"[^>]*>(.*?)</article>', r.text, re.S)
+        return out
+    t = r.text
+    m = re.search(r'<meta property="og:title" content="([^"]*)"', t)
+    if m:
+        out["title"] = html.unescape(m.group(1)).strip()
+    m = re.search(r'<article[^>]*id="dic_area"[^>]*>(.*?)</article>', t, re.S)
     if not m:
-        return ""
-    s = re.sub(r"<br\s*/?>", "\n", m.group(1))
+        return out
+    raw = m.group(1)
+    sm = re.search(r'<strong class="media_end_summary">(.*?)</strong>', raw, re.S)
+    if sm:
+        parts = re.split(r"<br\s*/?>", sm.group(1))
+        out["summary"] = [html.unescape(re.sub(r"<[^>]+>", "", x)).strip()
+                          for x in parts if re.sub(r"<[^>]+>", "", x).strip()]
+        raw = raw.replace(sm.group(0), "\n")
+    s = re.sub(r"<br\s*/?>", "\n", raw)
     s = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", s, flags=re.S)
     s = html.unescape(re.sub(r"<[^>]+>", "", s))
-    return clean(s)[:limit]
+    out["body"] = clean(s)[:limit]
+    return out
+
+
+def fetch_body(url: str, limit: int = 3500) -> str:
+    return fetch_article(url, limit)["body"]
 
 
 def clean(text: str) -> str:
@@ -332,20 +354,32 @@ def _sentences(text: str) -> list[str]:
 
 
 def enrich(n: dict, names: set[str]) -> dict:
-    """기사 한 건의 핵심·분석·관련 종목. 본문을 못 받아도 빈 값으로 돌려준다.
+    """기사 한 건의 제목·핵심·분석·관련 종목. 본문을 못 받아도 빈 값으로 돌려준다.
 
     engine: 'gemini' / 'claude' (AI 가 씀) 또는 'rule' (키가 없거나 호출이 실패해 규칙으로 뽑음)
     """
-    title = n.get("title") or ""
-    body = fetch_body(n.get("url") or "")
-    text = f"{title} {body}"
-    info = {"points": [], "analysis": "", "tags": tags_of(title, body),
+    list_title = n.get("title") or ""
+    art = fetch_article(n.get("url") or "")
+    body, heads = art["body"], art["summary"]
+    # 목록 제목은 길면 잘려 있다. 기사 페이지의 전체 제목을 쓴다.
+    title = art["title"] if len(art["title"]) >= len(list_title.rstrip(".… ")) else list_title
+    text = f"{title} {' '.join(heads)} {body}"
+    info = {"title": title, "points": [], "analysis": "", "tags": tags_of(title, " ".join(heads) + body),
             "related": related_of(text, names), "engine": "rule"}
-    out = _llm(title, body)
+    ai_body = ("\n".join(heads) + "\n" + body) if heads else body
+    out = _llm(title, ai_body)
     if out:
         info["points"] = out["points"]
         info["analysis"] = out["analysis"]
         info["engine"] = out.get("engine", "ai")
-    else:
-        info["points"] = key_points(title, body, names)
+        return info
+    # 규칙: 편집자의 요약 소제목이 있으면 그것이 가장 정확한 핵심이다. 모자라면 본문에서 보탠다.
+    points = [noun_style(h)[:110] for h in heads][:3]
+    if len(points) < 3:
+        for p in key_points(title, body, names, n=3):
+            if len(points) >= 3:
+                break
+            if not any(len(_gram(p) & _gram(q)) / max(1, len(_gram(p) | _gram(q))) > 0.4 for q in points):
+                points.append(p)
+    info["points"] = points
     return info
