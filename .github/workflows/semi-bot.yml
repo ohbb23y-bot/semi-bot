@@ -28,16 +28,17 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "once(한 번 확인) / daily(업황 리포트) / loop(계속 확인)"
+        description: "once(한 번 확인) / daily(업황 리포트) / loop(계속 확인) / newstest(기사 분석 시험)"
         default: once
         type: choice
-        options: [once, daily, loop]
+        options: [once, daily, loop, newstest]
       minutes:
         description: "loop 일 때 몇 분 동안 돌까"
         default: "10"
 
 concurrency:
-  group: semi-bot
+  # 기사 분석 시험은 상태를 건드리지 않으므로, 계속 도는 작업을 기다리지 않게 따로 둔다
+  group: ${{ inputs.mode == 'newstest' && 'semi-bot-test' || 'semi-bot' }}
   cancel-in-progress: false
 
 jobs:
@@ -80,6 +81,7 @@ jobs:
 
           case "$MODE" in
             daily) python -m bot.daily ;;
+            newstest) python -m bot.watch --news-test ;;
             once)  python -m bot.watch --days "$DAYS" ;;
             loop)  python -m bot.watch --loop --every 60 --days "$DAYS" --max-minutes "${MINUTES:-10}" ;;
             *)

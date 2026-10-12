@@ -116,6 +116,8 @@ def _args() -> argparse.Namespace:
     ap.add_argument("--no-news", action="store_true")
     ap.add_argument("--no-insider", action="store_true",
                     help="임원·주요주주 소유상황 신고를 빼고 본다")
+    ap.add_argument("--news-test", action="store_true",
+                    help="중요한 기사 한 건에 분석을 붙여 보내 본다 (상태는 건드리지 않는다)")
     ap.add_argument("--loop", action="store_true",
                     help="계속 돌면서 새 공시가 뜨는 대로 보낸다 (서버용)")
     ap.add_argument("--every", type=int, default=60, help="--loop 확인 간격(초)")
@@ -128,9 +130,29 @@ def _args() -> argparse.Namespace:
 
 def main() -> int:
     a = _args()
+    if a.news_test:
+        return news_test(a)
     if a.loop:
         return loop(a)
     return run_once(a, state.load())
+
+
+def news_test(a: argparse.Namespace) -> int:
+    """기사 분석이 제대로 붙는지 보는 시험. 시간·이미 보낸 기록과 상관없이 한 건만 고른다."""
+    names = set(universe().values())
+    arts = news.pick(news.sector(limit=40), 1, names=names)
+    if not arts:
+        print("고를 만한 기사가 없습니다.")
+        return 1
+    n = arts[0]
+    n["info"] = analyst.enrich(n, names)
+    text = "🧪 <i>테스트</i>\n" + article_block(n, n["info"])
+    print(text)
+    print("분석 줄:", "있음" if n["info"].get("analysis") else "없음 (키워드로 대체됨)")
+    if not a.dry:
+        telegram.send_one(text)
+        print("채널로 보냈습니다.")
+    return 0
 
 
 def run_once(a: argparse.Namespace, st: dict) -> int:
