@@ -30,13 +30,21 @@ def _cells(xml: str) -> list[str]:
             if c.strip()]
 
 
-def _after(cells: list[str], label: str) -> str:
-    """라벨 바로 다음 칸의 값. 같은 라벨이 여럿이면 마지막 것."""
-    hit = ""
-    for i, c in enumerate(cells[:-1]):
-        if c == label:
-            hit = cells[i + 1]
-    return hit
+def _after(cells: list[str], *labels: str) -> str:
+    """라벨 바로 다음 칸의 값. 같은 라벨이 여럿이면 마지막 것.
+
+    서식마다 라벨 표기가 조금씩 다르다('매출액 대비(%)' / '매출액대비(%)'). 공백은 무시하고,
+    여러 표기를 주면 앞에서부터 처음 찾아지는 것을 쓴다.
+    """
+    for label in labels:
+        key = label.replace(" ", "")
+        hit = ""
+        for i, c in enumerate(cells[:-1]):
+            if c == label or c.replace(" ", "") == key:
+                hit = cells[i + 1]
+        if hit:
+            return hit
+    return ""
 
 
 def _num(s: str) -> float | None:
@@ -48,15 +56,16 @@ def _num(s: str) -> float | None:
 
 
 def parse_cells(cells: list[str]) -> dict | None:
-    amount = _num(_after(cells, "계약금액 총액(원)"))
-    if amount is None:
-        return None
-    sales = _num(_after(cells, "최근 매출액(원)"))
-    pct = _num(_after(cells, "매출액 대비(%)"))
-    if pct is None and sales:
+    amount = _num(_after(cells, "계약금액 총액(원)", "계약금액(원)", "확정 계약금액", "계약금액 총액"))
+    other0 = _after(cells, "3. 계약상대방", "3. 계약상대")
+    if amount is None and not other0.strip("-"):
+        return None                            # 금액도 상대도 없으면 읽을 게 없다
+    sales = _num(_after(cells, "최근 매출액(원)", "최근매출액(원)"))
+    pct = _num(_after(cells, "매출액 대비(%)", "매출액대비(%)"))
+    if pct is None and sales and amount is not None:
         pct = amount / sales * 100
-    other = _after(cells, "3. 계약상대방")
-    item = _after(cells, "1. 판매ㆍ공급계약 내용")
+    other = _after(cells, "3. 계약상대방", "3. 계약상대")
+    item = _after(cells, "1. 판매ㆍ공급계약 내용", "- 체결계약명", "체결계약명")
     return {
         "item": "" if item == "-" else item,   # 무엇을 공급하나
         "amount": amount,                      # 원
@@ -95,7 +104,9 @@ def eok(won: float | None) -> str:
 
 def line(info: dict) -> str:
     """텔레그램에 붙일 한 줄 (HTML)."""
-    bits = [f"💵 <b>{eok(info['amount'])}</b>"]
+    # 조건부 계약이거나 비공개라 금액이 '-' 인 공시도 있다
+    bits = [f"💵 <b>{eok(info['amount'])}</b>" if info.get("amount") is not None
+            else "💵 <i>금액 미공개</i>"]
     if info.get("pct") is not None:
         s = f"최근 매출 대비 <b>{info['pct']:.1f}%</b>"
         if info.get("sales"):

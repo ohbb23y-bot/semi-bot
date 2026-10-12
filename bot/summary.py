@@ -266,8 +266,8 @@ _DATE_KR = re.compile(r"^\d{4}년 \d{2}월 \d{2}일$")
 
 def _kr_md(s: str) -> str:
     """'2026년 10월 02일' → '10/02'"""
-    m = re.match(r"^\d{4}년 (\d{2})월 (\d{2})일$", s)
-    return f"{m.group(1)}/{m.group(2)}" if m else s
+    m = re.match(r"^\d{4}\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일$", s) or         re.match(r"^\d{4}[.\-](\d{1,2})[.\-](\d{1,2})\.?$", s)
+    return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}" if m else s
 
 
 def _signed(num: str, category: str) -> str:
@@ -418,6 +418,110 @@ def transfer(c: list[str], title: str) -> list[str]:
     return [x for x in (a, b) if x]
 
 
+def short_loan(c: list[str], title: str) -> list[str]:
+    """단기차입금 증가 결정."""
+    amt = _num(_next(c, "차입금액(원)"))
+    pct = _next(c, "자기자본대비(%)")
+    why = _next(c, "3. 차입목적")
+    how = _next(c, "4. 차입형태")
+    a = _ln(f"차입 {_won(amt)}" if amt else "", f"자기자본 대비 {pct}%" if pct else "", esc(how))
+    b = f"목적 {esc(_clean(why, 70))}" if why else ""
+    return [x for x in (a, b) if x]
+
+
+def earnings_notice(c: list[str], title: str) -> list[str]:
+    """결산실적 공시 예고: 언제 발표하나."""
+    s, e = _next(c, "시작일"), _next(c, "종료일")
+    when = _next(c, "3. 결산실적 공시예정일")
+    a = _ln(f"대상 {s} ~ {e}" if s and e else "", f"공시 예정 {when}" if when else "")
+    return [a] if a else []
+
+
+def issue_result(c: list[str], title: str) -> list[str]:
+    """증권 발행 결과 (유상증자 납입 완료 등)."""
+    kind = c[0] if c and len(c[0]) < 20 else ""
+    way = _next(c, "2. 발행방법")
+    shares = _num(_next(c, "실제발행주식수(주)"))
+    amt = _num(_next(c, "실제발행금액(원)"))
+    pay = _next(c, "납입일")
+    listing = _next(c, "4. 상장예정 여부")
+    a = _ln(esc(way), f"{shares:,.0f}주" if shares else "", _won(amt) if amt else "")
+    b = _ln(f"납입일 {pay}" if pay else "", f"상장예정 {listing}" if listing else "")
+    return [x for x in (a, b) if x] or ([esc(kind)] if kind else [])
+
+
+def notice(c: list[str], title: str) -> list[str]:
+    """투자유의 안내 · 상장폐지 우려 예고처럼 제목 줄과 '내용'이 있는 공시."""
+    head = c[0] if c and len(c[0]) >= 12 else ""
+    body_ = _next(c, "2. 내용") or _next(c, "2. 주요내용")
+    out = [esc(_clean(head, 100))] if head else []
+    if body_:
+        out.append(esc(_clean(body_, 110)))
+    return out
+
+
+def bonus_issue(c: list[str], title: str) -> list[str]:
+    """무상증자 결정."""
+    new = _num(_seek(c, "1. 신주의 종류와 수", "보통주식 (주)"))
+    before = _num(_seek(c, "3. 증자전 발행주식총수", "보통주식 (주)"))
+    ratio = _seek(c, "5. 1주당 신주배정 주식수", "보통주식 (주)")
+    base = _next(c, "4. 신주배정기준일")
+    a = _ln(f"신주 {new:,.0f}주" if new else "", f"기존 1주당 {ratio}주 배정" if ratio else "",
+            f"기존 대비 {new / before * 100:.0f}%" if new and before else "")
+    b = f"신주배정 기준일 {base}" if base else ""
+    return [x for x in (a, b) if x]
+
+
+# 범용: 전용 규칙이 없는 서식에서 금액·일자·목적 같은 핵심 항목을 자동으로 뽑는다.
+_FACT_KEY = re.compile(r"금액|총액|주식수|수량|비율|일자|기간|목적|사유|내용|방법|형태|상대|대상|가액|가격|한도|이율")
+_SUBLABELS = {"시작일", "종료일", "금액", "비율", "해지 전", "해지 후", "변경전", "변경후", "정정전", "정정후",
+              "종류", "주식수", "구분", "항목", "비고", "내용", "합계", "해당", "미해당"}
+_FACT_SKIP = re.compile(r"^(\d+\.\s*)?(기타|※|관련공시|참석|불참)|사외이사|감사|확인|서명|담당|전화|이메일")
+
+
+def _fact_label(lb: str) -> str:
+    lb = re.sub(r"^(?:[\d.\s\-]+|[가-하]\.\s*)+", "", lb)
+    return re.sub(r"\s*\((원|주|%)\)\s*$", "", lb).strip()
+
+
+def generic(c: list[str], title: str, limit: int = 5) -> list[str]:
+    """제목 줄(있으면) + '라벨 값' 형태의 핵심 항목 몇 개."""
+    out: list[str] = []
+    head = c[0] if c and 12 <= len(c[0]) <= 90 and not re.match(r"^\d+\.", c[0]) else ""
+    if re.search(r"\d\.\d\s|귀중|거래소 신고의무|주요사항보고서\s*/|정\s*정\s*신\s*고", head):
+        head = ""
+    if head and "(" in head or (head and not _FACT_KEY.search(head)):
+        out.append(esc(_clean(head, 90)))
+    facts: list[str] = []
+    seen: set[str] = set()
+    for i in range(len(c) - 1):
+        lb, v = c[i], c[i + 1]
+        if len(lb) > 45 or not v or v == "-" or len(v) > 90:
+            continue
+        if not _FACT_KEY.search(lb) or _FACT_SKIP.search(lb):
+            continue
+        if re.match(r"^\d+\.\s", v) or re.search(r"\((원|주|%)\)$", v) or v == lb or v in _SUBLABELS:
+            continue                                         # 값 칸이 또 다른 라벨이다
+        key = _fact_label(lb)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        num = _num(v)
+        if num is not None and "(원)" in lb and abs(num) >= 1e7:
+            val = _won(num)
+        else:
+            val = _clean(v, 60)
+        # 숫자 없는 짧은 값('주식의 종류', '처분대상')은 표 머리글일 가능성이 크다
+        if not re.search(r"\d", val) and len(val) <= 8 and not re.search(r"방법|형태|목적|사유|상대|대상|내용", key):
+            continue
+        facts.append(f"{esc(key)} {esc(val)}")
+        if len(facts) >= limit:
+            break
+    for k in range(0, len(facts), 2):                           # 한 줄에 두 개씩
+        out.append(" · ".join(facts[k:k + 2]))
+    return out[:4]
+
+
 def freetext(c: list[str], title: str) -> list[str]:
     """서식이 제각각인 공시: '주요내용' 칸을 그대로."""
     for lb in ("2. 주요내용", "주요내용", "2. 주요 내용", "주요 내용", "1. 제목"):
@@ -488,40 +592,62 @@ def correction(c: list[str], title: str) -> list[str]:
         if len(was) > 50 or len(now) > 50:
             continue
         out.append(f"{esc(_clean(label(lb), 40))}  {esc(was)} → {esc(now)}{why}")
+    if has_reason_col and not any("→" in x for x in out):
+        row = c[i + 1:i + 5]                                  # 항목, 정정사유, 정정전, 정정후
+        if len(row) == 4 and all(len(x) < 60 for x in row) and not re.match(r"^\d+\.", row[0]):
+            out.append(f"{esc(row[0])}  {esc(row[2])} → {esc(row[3])} — {esc(row[1])}")
     return out
 
 
 # 제목에 이 패턴이 있으면 해당 해석기를 쓴다. 위에서부터 먼저 맞는 것.
 RULES: list[tuple[re.Pattern, Callable[[list[str], str], list[str]]]] = [
     (re.compile(r"유상증자결정"), rights_issue),
+    (re.compile(r"무상증자결정"), bonus_issue),
     (re.compile(r"(전환사채권|신주인수권부사채권|교환사채권)발행결정"), convertible),
     (re.compile(r"신규시설투자"), facility),
     (re.compile(r"유형자산.*(양수|양도|취득|처분)결정"), asset_deal),
     (re.compile(r"자기주식.*(취득|처분|소각)결정"), treasury),
     (re.compile(r"배당결정"), dividend),
     (re.compile(r"영업\(잠정\)|잠정실적"), earnings),
+    (re.compile(r"결산실적공시예고"), earnings_notice),
     (re.compile(r"대량보유"), holding),
     (re.compile(r"불성실공시"), unfaithful),
     (re.compile(r"임원.*주요주주.*소유상황"), insider),
     (re.compile(r"의결권대리행사권유"), proxy),
     (re.compile(r"주식양수도|최대주주.*변경"), transfer),
     (re.compile(r"풍문|조회공시|해명"), rumor),
+    (re.compile(r"단기차입금증가"), short_loan),
+    (re.compile(r"증권발행결과"), issue_result),
+    (re.compile(r"투자유의안내|상장폐지|관리종목|회생절차"), notice),
 ]
 _FIXED = re.compile(r"^\[[^\]]*정정\]")
 
 
 def lines(category: str, title: str, c: list[str] | None) -> list[str]:
-    """요약 줄들 (HTML). 읽지 못하면 빈 목록."""
+    """요약 줄들 (HTML). 읽지 못하면 빈 목록.
+
+    순서: 정정 → 서식별 전용 규칙 → '주요내용' 칸 → 범용 핵심 항목.
+    앞 단계가 비어 있으면 다음 단계로 넘어간다. 틀린 숫자를 만드느니 비우는 쪽이 낫다.
+    """
     if not c:
         return []
-    try:
-        if _FIXED.match(title.strip()):
-            return correction(c, title)
+    steps: list[Callable[[], list[str]]] = []
+    if _FIXED.match(title.strip()):
+        steps.append(lambda: correction(c, title))
+    else:
         for pat, fn in RULES:
             if pat.search(title):
-                return fn(c, title)
-        if category in ("위험신호", "지배구조", "증설·CAPEX", "자금조달", "주주환원"):
-            return freetext(c, title)
-    except Exception:                                      # noqa: BLE001
-        return []
+                steps.append(lambda fn=fn: fn(c, title))
+                break
+    if category in ("위험신호", "지배구조", "증설·CAPEX", "자금조달", "주주환원", "해명"):
+        steps.append(lambda: freetext(c, title))
+    if category not in ("수주", "IR"):                        # 이 둘은 전용 줄(계약·일정)이 따로 있다
+        steps.append(lambda: generic(c, title))
+    for step in steps:
+        try:
+            out = step()
+        except Exception:                                  # noqa: BLE001
+            continue
+        if out:
+            return out
     return []
