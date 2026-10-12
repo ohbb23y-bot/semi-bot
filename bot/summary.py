@@ -370,9 +370,42 @@ def proxy(c: list[str], title: str) -> list[str]:
     return [x for x in (a, b, d) if x]
 
 
+def major_change(c: list[str], title: str) -> list[str]:
+    """최대주주 변경(변경이 확정된 뒤 내는 공시): 누가 누구로, 지분은 얼마, 왜."""
+    i, j = _idx(c, "변경전"), _idx(c, "변경후")
+    if i < 0 or j < 0:
+        return []
+
+    def pick(k: int) -> tuple[str, str, str]:
+        name = c[k + 2] if k + 2 < len(c) else ""
+        return name, _next(c, "소유주식수(주)", k), _next(c, "소유비율(%)", k)
+
+    nb, sb, pb = pick(i)
+    na, sa, pa = pick(j)
+    a = f"{esc(nb)} → {esc(na)}" if nb and na else ""
+    if sb and sb == sa and pb == pa:
+        own = f"{sa}주({pa}%) 그대로 이전"
+    else:
+        own = f"{sb or '-'}주({pb or '-'}%) → {sa or '-'}주({pa or '-'}%)"
+    when = _next(c, "4. 변경일자")
+    why = _next(c, "2. 변경사유")
+    purpose = _next(c, "3. 지분인수목적")
+    fund = _num(_next(c, "자기자금(원)"))
+    debt = _num(_next(c, "차입금(원)"))
+    out = [a,
+           _ln(own, f"변경일 {when}" if when else ""),
+           _ln(f"목적 {esc(purpose)}" if purpose else "",
+               f"인수자금 {_won(fund)}" if fund else "",
+               f"차입 {_won(debt)}" if debt else ""),
+           f"사유 {esc(_clean(why, 80))}" if why else ""]
+    return [x for x in out if x]
+
+
 def transfer(c: list[str], title: str) -> list[str]:
     """최대주주 변경을 수반하는 주식 양수도 계약."""
     seller, buyer = _next(c, "-양도인"), _next(c, "-양수인")
+    if not seller and not buyer:
+        return major_change(c, title)
     shares = _num(_next(c, "양수도 주식수(주)"))
     price = _num(_next(c, "1주당 가액(원)"))
     amt = _num(_next(c, "양수도 대금(원)"))
