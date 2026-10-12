@@ -319,33 +319,34 @@ def insider(c: list[str], title: str) -> list[str]:
         elif c[dlt + 1] not in ("-", ""):
             chg = f"증감 {c[dlt + 1]}주"
 
-    # 세부 변동 내역: 변동일, 종류, 변동전, 증감, 변동후, 단가, 비고…
-    detail = ""
+    # 세부 변동 내역. 행마다 [구분(+/-), 변동일, 종류, 변동전, 증감, 변동후, 단가, 비고…, 거래계획일]
+    details: list[str] = []
     n = _rx(c, r"^다\. 세부변동내역", m)
     h = _idx(c, "변동후", n) if n >= 0 else -1
-    if h >= 0 and h + 1 < len(c):
-        cat = c[h + 1]
-        rows, cur = [], []
-        for x in c[h + 2:h + 40]:
+    if h >= 0:
+        rows: list[list[str]] = []
+        cur: list[str] | None = None
+        for x in c[h + 1:h + 120]:
             if x == "합 계" or x.startswith("*"):
                 break
-            if _DATE_KR.match(x):
-                if cur:
-                    rows.append(cur)
+            if re.search(r"\([+-]\)$", x):                  # 새 행: '장내매수(+)' '장내매도(-)'
                 cur = [x]
-            elif cur:
+                rows.append(cur)
+            elif cur is not None:
                 cur.append(x)
-        if cur:
-            rows.append(cur)
-        if rows:
-            r = rows[0]
-            price = r[5] if len(r) > 5 and re.fullmatch(r"[\d,]+", r[5] or "") else ""
-            remark = " ".join(x for x in r[6:-1] if x not in ("-", ""))
-            detail = _ln(_kr_md(r[0]), esc(cat), f"{_signed(r[3], cat)}주" if len(r) > 3 else "",
-                         f"단가 {price}원" if price else "", esc(_clean(remark, 50)))
-            if len(rows) > 1:
-                detail += f" 외 {len(rows) - 1}건"
-    out = [a, _ln(own, chg), detail]
+        for r in rows[:3]:
+            cat = r[0]
+            date = r[1] if len(r) > 1 else ""
+            delta = r[4] if len(r) > 4 else ""
+            price = r[6] if len(r) > 6 and re.fullmatch(r"[\d,]+", r[6] or "") else ""
+            remark = " ".join(x for x in r[7:-1] if x not in ("-", ""))
+            details.append(_ln(_kr_md(date), esc(cat),
+                               f"{_signed(delta, cat)}주" if delta else "",
+                               f"단가 {price}원" if price else "",
+                               esc(_clean(remark, 40))))
+        if len(rows) > 3 and details:
+            details[-1] += f" 외 {len(rows) - 3}건"
+    out = [a, _ln(own, chg)] + details
     return [x for x in out if x]
 
 
