@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from datetime import datetime, time as dtime
 
@@ -146,9 +147,12 @@ def news_test(a: argparse.Namespace) -> int:
         return 1
     n = arts[0]
     n["info"] = analyst.enrich(n, names)
-    text = "🧪 <i>테스트</i>\n" + article_block(n, n["info"])
+    eng_name = {"gemini": "Gemini", "claude": "Claude"}.get(n["info"].get("engine"), "규칙(AI 미사용)")
+    text = f"🧪 <i>테스트 · 요약 엔진: {eng_name}</i>\n\n" + article_block(n, n["info"])
     print(text)
-    print("분석 줄:", "있음" if n["info"].get("analysis") else "없음 (키워드로 대체됨)")
+    eng = n["info"].get("engine")
+    has_key = bool((os.getenv("GEMINI_API_KEY") or "").strip())
+    print(f"요약 엔진: {eng} | GEMINI_API_KEY: {'있음' if has_key else '없음'}")
     if not a.dry:
         telegram.send_one(text)
         print("채널로 보냈습니다.")
@@ -284,6 +288,10 @@ def loop(a: argparse.Namespace) -> int:
     PUSH_EVERY = 300          # 초. Actions 에서 상태를 이만큼 간격으로만 올린다
     news_off = a.no_news
     print(f"[감시 시작] {a.every}초 간격 · 평일 {WINDOW[0]:%H:%M}~{WINDOW[1]:%H:%M}", flush=True)
+    print("[설정] 기사 분석 AI:",
+          "Gemini 키 있음" if (os.getenv("GEMINI_API_KEY") or "").strip()
+          else ("Claude 키 있음" if (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+                else "키 없음 (규칙으로 요약)"), flush=True)
     while True:
         if in_window(kst_now()):
             try:

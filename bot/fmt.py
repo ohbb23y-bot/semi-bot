@@ -51,18 +51,24 @@ def article_line(n: dict) -> str:
 
 
 def article_block(n: dict, info: dict | None = None) -> str:
-    """제목 · 내용 · 분석 · 링크. 본문을 못 읽었으면 제목과 링크만."""
+    """제목 · 핵심 · 분석 · 링크. 본문을 못 읽었으면 제목과 링크만.
+
+    인용 블록(<blockquote>)에 넣으면 글씨가 작아지고 답답해 보여서 쓰지 않는다.
+    항목 사이를 한 줄씩 띄운다.
+    """
     info = info or {}
-    rows = []
-    if info.get("summary"):
-        rows.append(f"<b>내용</b>  {esc(info['summary'])}")
+    parts = [f"<b>📰 {esc((n.get('title') or '')[:90])}</b>"]
+
+    points = info.get("points") or ([info["summary"]] if info.get("summary") else [])
+    if points:
+        parts.append("<b>💡 핵심</b>\n" + "\n".join(f"• {esc(p)}" for p in points))
     if info.get("analysis"):
-        rows.append(f"<b>분석</b>  {esc(info['analysis'])}")
+        parts.append(f"<b>🔎 분석</b>\n{esc(info['analysis'])}")
     elif info.get("tags"):
-        rows.append("<b>키워드</b>  " + " · ".join(esc(t) for t in info["tags"]))
+        parts.append("<b>🏷 키워드</b>  " + " · ".join(esc(t) for t in info["tags"]))
     if info.get("related"):
-        rows.append("<b>관련</b>  " + " · ".join(esc(t) for t in info["related"]))
-    quote = "\n<blockquote>" + "\n".join(rows) + "</blockquote>" if rows else ""
+        parts.append("<b>📌 관련</b>  " + " · ".join(esc(t) for t in info["related"]))
+
     press = esc(n.get("press") or "")
-    foot = (f"<i>{press}</i> · " if press else "") + link(n["url"], "기사 원문")
-    return f"<b>📰 {esc((n.get('title') or '')[:90])}</b>{quote}\n{foot}"
+    parts.append((f"<i>{press}</i> · " if press else "") + link(n["url"], "기사 원문"))
+    return "\n\n".join(parts)

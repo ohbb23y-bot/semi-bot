@@ -16,6 +16,7 @@ import os
 import re
 
 from . import config  # noqa: F401  (.env 를 먼저 읽는다)
+from .news import _gram
 from .sources.http import client
 
 API = "https://api.anthropic.com/v1/messages"
@@ -197,22 +198,101 @@ def _llm(title: str, body: str) -> dict | None:
     if gkey:
         out = _gemini(prompt, gkey)
         if out:
-            return out
+            return {**out, "engine": "gemini"}
     ckey = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
     if ckey:
-        return _claude(prompt, ckey)
+        out = _claude(prompt, ckey)
+        if out:
+            return {**out, "engine": "claude"}
     return None
 
 
+_SENT_SPLIT = re.compile(r"(?<=[다요]\.)\s+|(?<=[?!])\s+")
+_NOISE_SENT = re.compile(r"기자|사진|연합뉴스|구독|좋아요|\[[^\]]*\]$|▶|☞")
+_NUM = re.compile(r"\d")
+_UNIT = re.compile(r"%|억|조|원|달러|배|분기|\d{4}년|만\s*대|건")
+_VERB = re.compile(r"전망|예상|발표|밝혔|계획|계약|증가|감소|확대|축소|인상|인하|돌파|기록|급증|급감|하락|상승|추진|확정|체결")
+
+
+def _words(s: str) -> set[str]:
+    return set(re.findall(r"[0-9A-Za-z가-힣]{2,}", s))
+
+
+def key_points(title: str, body: str, names: set[str], n: int = 3, maxlen: int = 100) -> list[str]:
+    """첫 문단이 아니라, 핵심이 담긴 문장을 골라 짧게 줄인다.
+
+    점수: 숫자·단위가 든 문장, 감시 종목 이름이 든 문장, 이슈 유형 키워드가 든 문장,
+    '전망·발표·계약·증가' 같은 핵심 동사, 제목과 겹치는 단어, 앞쪽 위치.
+    고른 문장은 기사에 나온 순서대로 보여준다.
+    """
+    sents: list[str] = []
+    for para in body.split("\n"):
+        para = _DATELINE.sub("", para).strip()
+        if len(para) < 30:                                  # 소제목·캡션
+            continue
+        sents += [x.strip() for x in _SENT_SPLIT.split(para) if x.strip()]
+    sents = [x for x in sents if 25 <= len(x) <= 220 and not _NOISE_SENT.search(x)]
+    if not sents:
+        return []
+    tw = _words(title)
+    scored = []
+    for i, s in enumerate(sents):
+        sc = max(0.0, 2.5 - i * 0.3)                        # 앞쪽 가산
+        if _NUM.search(s):
+            sc += 1.5
+        if _UNIT.search(s):
+            sc += 1.0
+        if any(nm in s for nm in names if len(nm) >= 2):
+            sc += 2.0
+        sc += 0.8 * sum(1 for _, pat in TAGS if re.search(pat, s, re.I))
+        if _VERB.search(s):
+            sc += 1.2
+        sc += min(2.0, 0.5 * len(tw & _words(s)))
+        if len(s) > 110:                                    # 길면 한눈에 안 들어온다
+            sc -= 1.5
+        scored.append((sc, i, s))
+    picked: list[tuple[int, str]] = []
+    for sc, i, s in sorted(scored, key=lambda x: -x[0]):
+        g = _gram(s)
+        if any(len(g & _gram(p)) / max(1, len(g | _gram(p))) > 0.4 for _, p in picked):
+            continue
+        picked.append((i, s))
+        if len(picked) >= n:
+            break
+    out = []
+    for _, s in sorted(picked):
+        s = re.sub(r"\(\d{6}\)", "", s)                     # 종목코드 괄호 같은 군더더기
+        s = re.sub(r"^[-·•▶▷\s]+", "", s)                   # 목록 기호
+        s = re.sub(r"\s+", " ", s).strip()
+        if len(s) > maxlen:
+            cut = s[:maxlen]
+            k = max(cut.rfind(", "), cut.rfind("，"))
+            if k < maxlen * 0.5:
+                k = cut.rfind(" ")
+            s = cut[:k if k > 0 else maxlen].rstrip(", ") + "…"
+        out.append(s)
+    return out
+
+
+def _sentences(text: str) -> list[str]:
+    return [x.strip() for x in _SENT_SPLIT.split(text) if x.strip()]
+
+
 def enrich(n: dict, names: set[str]) -> dict:
-    """기사 한 건의 내용·분석·관련 종목. 본문을 못 받아도 빈 값으로 돌려준다."""
+    """기사 한 건의 핵심·분석·관련 종목. 본문을 못 받아도 빈 값으로 돌려준다.
+
+    engine: 'gemini' / 'claude' (AI 가 씀) 또는 'rule' (키가 없거나 호출이 실패해 규칙으로 뽑음)
+    """
+    title = n.get("title") or ""
     body = fetch_body(n.get("url") or "")
-    text = f"{n.get('title') or ''} {body}"
-    info = {"summary": "", "analysis": "", "tags": tags_of(n.get("title") or "", body),
-            "related": related_of(text, names)}
-    out = _llm(n.get("title") or "", body)
+    text = f"{title} {body}"
+    info = {"points": [], "analysis": "", "tags": tags_of(title, body),
+            "related": related_of(text, names), "engine": "rule"}
+    out = _llm(title, body)
     if out:
-        info.update(out)
+        info["points"] = _sentences(out["summary"])[:3]
+        info["analysis"] = out["analysis"]
+        info["engine"] = out.get("engine", "ai")
     else:
-        info["summary"] = extract_summary(body)
+        info["points"] = key_points(title, body, names)
     return info
