@@ -81,7 +81,7 @@ def digest_message(rows: list[dict], part: int = 0) -> str:
 
 
 def news_message(arts: list[dict]) -> str:
-    return (f"<b>📰 주요 기사</b>  <i>최근 {NEWS_WITHIN_MIN}분</i>\n<blockquote>"
+    return (f"<b>📰 주요 기사</b>\n<blockquote>"
             + "\n\n".join(article_line(n) for n in arts) + "</blockquote>")
 
 
