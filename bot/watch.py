@@ -43,25 +43,29 @@ def _entry(it: dict) -> str:
     if it.get("ir"):
         ln = contract.ir_line(it["ir"])
         if ln:
-            lines.append("└ " + ln)
+            lines.append("• " + ln)
     ci = it.get("contract")
     if ci:
-        lines.append("└ " + contract.line(ci))
+        lines.append("• " + contract.line(ci))
         what = " · ".join(x for x in (esc(ci.get("item") or "")[:60],
                                       esc(ci.get("party") or "")[:40]) if x)
         if what:
-            lines.append("└ " + what)
+            lines.append("• " + what)
     elif it.get("want_contract"):
         lines.append("└ 💵 <i>공시 원문 참조</i>")
     for s in it.get("summary") or []:
-        lines.append("└ " + s)
+        lines.append("• " + s)
     return "\n".join(lines)
 
 
 def stock_message(name: str, rows: list[dict]) -> str:
-    """한 종목의 메시지."""
+    """한 종목의 메시지.
+
+    인용 블록(<blockquote>)에 넣으면 글씨가 작아지고 답답해 보여서 쓰지 않는다.
+    공시마다 한 줄 띄워 구분한다.
+    """
     head = f"<b>🔔 {esc(name)}</b>  <code>{kst_now():%m/%d %H:%M}</code>"
-    return head + "\n<blockquote>" + "\n".join(_entry(r) for r in rows) + "</blockquote>"
+    return head + "\n\n" + "\n\n".join(_entry(r) for r in rows)
 
 
 DIGEST_LABEL = {"지분변동": "5% 대량보유 (약식)", "임원지분": "임원·주요주주 소유상황"}
