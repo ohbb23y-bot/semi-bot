@@ -170,9 +170,8 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
     arts: list[dict] = []
     pool: list[dict] = []
     if not a.no_news:
-        seen_titles = set(st.get("news_seen") or [])
-        pool = [n for n in news.fresh(news.sector(limit=40), NEWS_WITHIN_MIN)
-                if n["title"] not in seen_titles]
+        pool = news.seen_filter(news.fresh(news.sector(limit=40), NEWS_WITHIN_MIN),
+                                list(st.get("news_seen") or []))
         arts = news.pick(pool, NEWS_MAX, names=set(universe().values()))
 
     msgs = build(trimmed, arts)

@@ -112,8 +112,11 @@ def run(dry: bool = False) -> int:
     mac = macro.snapshot()
     # 데일리는 하루치에서 고른다 (30분 감시는 최근 1시간).
     today = kst_now().strftime("%Y-%m-%d")
+    st = state.load()
     pool = [n for n in news.sector(limit=40)
             if (n.get("datetime") or "").startswith(today)]
+    # 낮에 30분 감시가 이미 보낸 기사는 다시 보내지 않는다
+    pool = news.seen_filter(pool, list(st.get("news_seen") or []))
     arts = news.pick(pool, 4, names=set(universe().values()))
 
     blocks = build(b, mac, arts)
@@ -124,6 +127,7 @@ def run(dry: bool = False) -> int:
     sent = telegram.send(blocks)
     st = state.load()
     st["last_daily"] = today
+    st["news_seen"] = (list(st.get("news_seen") or []) + [n["title"] for n in arts])[-400:]
     state.save(st)
     print(f"데일리 전송 완료 (메시지 {sent}개)")
     return 0

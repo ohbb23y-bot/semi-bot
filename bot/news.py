@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import html
 import re
 
 from .sources import naver
@@ -115,8 +116,26 @@ def score(title: str, names: "set[str] | None" = None) -> int:
 
 
 def _gram(s: str) -> set[str]:
-    s = re.sub(r"[^0-9A-Za-z가-힣]", "", s or "")
+    s = re.sub(r"[^0-9A-Za-z가-힣]", "", html.unescape(s or ""))
     return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+def seen_filter(items: list[dict], seen_titles: list[str], thresh: float = 0.45) -> list[dict]:
+    """이미 보낸 기사와 같거나 거의 같은 내용이면 뺀다.
+
+    제목이 글자 그대로 같을 때만 걸러서는, 같은 소식을 제목만 바꿔 다시 낸 기사와
+    다른 언론사의 같은 보도가 계속 올라간다. 두 글자씩 끊어 겹치는 비율로 비교한다.
+    """
+    seen_g = [g for g in (_gram(t) for t in seen_titles) if g]
+    out = []
+    for it in items:
+        g = _gram(it.get("title") or "")
+        if not g:
+            continue
+        if any(len(g & s) / len(g | s) > thresh for s in seen_g):
+            continue
+        out.append(it)
+    return out
 
 
 def pick(items: list[dict], n: int = 4, min_score: int = 3,
