@@ -30,8 +30,8 @@ COMPACT = {"임원지분"}          # 일상 신고는 종목별로 보내면 �
 
 
 def _is_compact(it: dict) -> bool:
-    return it["category"] in COMPACT or (
-        it["category"] == "지분변동" and "약식" in it["title"])
+    """이름만 묶어 보내는 공시. 지금은 없다 — 지분 공시도 원문에서 핵심을 읽어 종목별로 보낸다."""
+    return False
 
 
 def _entry(it: dict) -> str:

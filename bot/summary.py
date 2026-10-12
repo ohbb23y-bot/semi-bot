@@ -225,8 +225,10 @@ def holding(c: list[str], title: str) -> list[str]:
             ratio = f"보유 {c[p + 2]}% → {c[q + 2]}%" + (
                 f" ({c[q + 1]}주)" if c[q + 1] != "-" else "")
     why = re.sub(r"^[-\s]+", "", _next(c, "보고사유"))
+    purpose = _next(c, "보유목적")
     a = _ln(f"보고자 {esc(who)}" if who else "", esc(rel), esc(kind))
-    b = _ln(ratio, f"사유 {esc(_clean(why, 60))}" if why else "")
+    b = _ln(ratio, f"목적 {esc(purpose)}" if purpose else "",
+            f"사유 {esc(_clean(why, 60))}" if why else "")
     return [x for x in (a, b) if x]
 
 
@@ -255,6 +257,129 @@ def rumor(c: list[str], title: str) -> list[str]:
     b = f"해명 {esc(_clean(answer, 120))}" if answer else ""
     d = f"재공시 예정 {again}" if again else ""
     return [x for x in (a, b, d) if x]
+
+
+_DATE_KR = re.compile(r"^\d{4}년 \d{2}월 \d{2}일$")
+
+
+def _kr_md(s: str) -> str:
+    """'2026년 10월 02일' → '10/02'"""
+    m = re.match(r"^\d{4}년 (\d{2})월 (\d{2})일$", s)
+    return f"{m.group(1)}/{m.group(2)}" if m else s
+
+
+def _signed(num: str, category: str) -> str:
+    """'4,305' + '장내매도(-)' → '-4,305'.  (+)/(-) 표시가 없으면 그대로."""
+    n = num.strip()
+    if not n or n == "-" or n[0] in "+-":
+        return n
+    if "(-)" in category:
+        return "-" + n
+    if "(+)" in category:
+        return "+" + n
+    return n
+
+
+def _name(s: str) -> str:
+    """'배 종 석' → '배종석'. DART 는 한 글자씩 띄워 적는 경우가 있다."""
+    parts = (s or "").split()
+    return "".join(parts) if len(parts) >= 2 and all(len(x) == 1 for x in parts) else (s or "")
+
+
+def insider(c: list[str], title: str) -> list[str]:
+    """임원·주요주주 특정증권등 소유상황 보고서: 누가, 얼마나 사고팔았나."""
+    who = _next(c, "보고자 :")
+    kind = _val(c, r"보고구분$")
+    pos = _next(c, "직위명")
+    reg = _next(c, "임원(등기여부)").replace("임원", "")
+    major = _next(c, "주요주주")
+    role = f"{pos}({reg})" if pos and reg else (pos or ("주요주주" if major else ""))
+    a = _ln(esc(_name(who)), esc(role), f"{esc(kind)} 보고" if kind else "")
+
+    m = _rx(c, r"^3\. 특정증권등의 소유상황")
+    if m < 0:
+        return [a] if a else []
+    prev, this, dlt = _idx(c, "직전보고서", m), _idx(c, "이번보고서", m), _idx(c, "증 감", m)
+    own = ""
+    if this >= 0 and this + 3 < len(c):
+        now, now_r = c[this + 2], c[this + 3]
+        was, was_r = (c[prev + 2], c[prev + 3]) if prev >= 0 and prev + 3 < len(c) else ("-", "-")
+        if was == "-":
+            own = f"보유 {now}주({now_r}%)"
+        else:
+            own = f"보유 {was}주({was_r}%) → {now}주({now_r}%)"
+    chg = ""
+    if dlt >= 0 and dlt + 1 < len(c):
+        d = _num(c[dlt + 1])
+        if d is not None and this >= 0 and prev >= 0:
+            wn, tn = _num(c[prev + 2]) or 0.0, _num(c[this + 2]) or 0.0
+            chg = f"증감 {tn - wn:+,.0f}주"
+        elif c[dlt + 1] not in ("-", ""):
+            chg = f"증감 {c[dlt + 1]}주"
+
+    # 세부 변동 내역: 변동일, 종류, 변동전, 증감, 변동후, 단가, 비고…
+    detail = ""
+    n = _rx(c, r"^다\. 세부변동내역", m)
+    h = _idx(c, "변동후", n) if n >= 0 else -1
+    if h >= 0 and h + 1 < len(c):
+        cat = c[h + 1]
+        rows, cur = [], []
+        for x in c[h + 2:h + 40]:
+            if x == "합 계" or x.startswith("*"):
+                break
+            if _DATE_KR.match(x):
+                if cur:
+                    rows.append(cur)
+                cur = [x]
+            elif cur:
+                cur.append(x)
+        if cur:
+            rows.append(cur)
+        if rows:
+            r = rows[0]
+            price = r[5] if len(r) > 5 and re.fullmatch(r"[\d,]+", r[5] or "") else ""
+            remark = " ".join(x for x in r[6:-1] if x not in ("-", ""))
+            detail = _ln(_kr_md(r[0]), esc(cat), f"{_signed(r[3], cat)}주" if len(r) > 3 else "",
+                         f"단가 {price}원" if price else "", esc(_clean(remark, 50)))
+            if len(rows) > 1:
+                detail += f" 외 {len(rows) - 1}건"
+    out = [a, _ln(own, chg), detail]
+    return [x for x in out if x]
+
+
+def proxy(c: list[str], title: str) -> list[str]:
+    """의결권 대리행사 권유 참고서류: 주총일, 안건."""
+    who = _next(c, "가. 권유자")
+    meet = _next(c, "라. 주주총회일")
+    start = _next(c, "마. 권유 시작일")
+    why = _next(c, "가. 권유취지")
+    i = _idx(c, "3. 주주총회 목적사항")
+    items: list[str] = []
+    if i >= 0:
+        for x in c[i + 1:i + 10]:
+            if not x.startswith("□"):
+                break
+            items.append(x.lstrip("□ ").strip())
+    a = _ln(f"권유자 {esc(who)}" if who else "", f"주총일 {_kr_md(meet)}" if meet else "",
+            f"권유 시작 {_kr_md(start)}" if start else "")
+    b = ("안건 " + " · ".join(esc(x) for x in items[:4])) if items else ""
+    d = f"취지 {esc(_clean(why, 60))}" if why else ""
+    return [x for x in (a, b, d) if x]
+
+
+def transfer(c: list[str], title: str) -> list[str]:
+    """최대주주 변경을 수반하는 주식 양수도 계약."""
+    seller, buyer = _next(c, "-양도인"), _next(c, "-양수인")
+    shares = _num(_next(c, "양수도 주식수(주)"))
+    price = _num(_next(c, "1주당 가액(원)"))
+    amt = _num(_next(c, "양수도 대금(원)"))
+    pct = _next(c, "-예정 소유비율(%)")
+    when = _next(c, "-변경 예정일자")
+    a = f"{esc(seller)} → {esc(buyer)}" if seller and buyer else ""
+    b = _ln(f"{shares:,.0f}주" if shares else "", f"지분 {pct}%" if pct else "",
+            _won(amt) if amt else "", f"주당 {price:,.0f}원" if price else "",
+            f"변경예정 {when}" if when else "")
+    return [x for x in (a, b) if x]
 
 
 def freetext(c: list[str], title: str) -> list[str]:
@@ -327,6 +452,9 @@ RULES: list[tuple[re.Pattern, Callable[[list[str], str], list[str]]]] = [
     (re.compile(r"영업\(잠정\)|잠정실적"), earnings),
     (re.compile(r"대량보유"), holding),
     (re.compile(r"불성실공시"), unfaithful),
+    (re.compile(r"임원.*주요주주.*소유상황"), insider),
+    (re.compile(r"의결권대리행사권유"), proxy),
+    (re.compile(r"주식양수도|최대주주.*변경"), transfer),
     (re.compile(r"풍문|조회공시|해명"), rumor),
 ]
 _FIXED = re.compile(r"^\[[^\]]*정정\]")
