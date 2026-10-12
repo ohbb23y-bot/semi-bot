@@ -24,6 +24,7 @@ MAX_ITEMS = 40                # 한 번에 이보다 많으면 줄인다
 NEWS_KEEP = 400               # 이미 보낸 기사 제목 기억 개수
 NEWS_WITHIN_MIN = 60          # 이 시간(분) 안에 나온 기사만
 NEWS_MAX = 4                  # 한 번에 보내는 기사 수
+BODY_WAIT_SEC = 10 * 60       # 본문이 아직 안 올라온 공시를 이만큼까지 기다린다
 COMPACT = {"임원지분"}          # 일상 신고는 종목별로 보내면 소음이라 묶어서 한 통으로
 
 
@@ -151,10 +152,22 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
     # 수주는 본문에서 계약금액·매출 대비 비중을, IR 은 일시·목적을 읽어 붙인다.
     # 기사는 공시에 붙이지 않는다. 같은 종목의 다른 기사가 달리면 이번 공시와
     # 엮여 오해를 부른다. 기사는 아래에서 따로 보낸다.
+    # DART 는 공시 목록에 올린 뒤 본문(document.xml)을 몇 분 늦게 내준다. 1분 간격으로
+    # 확인하면 본문이 아직 없을 때 읽게 되어 요약이 통째로 빠진다. 본문이 없으면 보내지
+    # 않고 다음 확인 때 다시 본다. 그래도 BODY_WAIT_SEC 안에 안 나오면 요약 없이 보낸다.
+    pend = st.setdefault("pending", {})
+    now = time.time()
+    ready: list[dict] = []
     for it in trimmed:
         if _is_compact(it):
-            continue                      # 일상 신고는 본문을 읽지 않는다
+            ready.append(it)              # 일상 신고는 본문을 읽지 않는다
+            continue
         cells = body.cells(it["rcept_no"])
+        if cells is None:
+            first = pend.setdefault(it["rcept_no"], now)
+            if now - first < BODY_WAIT_SEC:
+                continue                  # 아직 본문이 없다. 다음에 다시
+        pend.pop(it["rcept_no"], None)
         if it["category"] == "수주" and "계약" in it["title"]:
             it["want_contract"] = True
             it["contract"] = contract.parse_cells(cells) if cells else None
@@ -165,6 +178,10 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
                              or summary.lines(it["category"], it["title"], cells))
         else:
             it["summary"] = summary.lines(it["category"], it["title"], cells)
+        ready.append(it)
+    trimmed = ready
+    for k in [k for k, t in pend.items() if now - t > 24 * 3600]:
+        del pend[k]                       # 하루 넘게 남은 기록은 버린다
 
     # ── 기사 ────────────────────────────────────────────────
     arts: list[dict] = []
