@@ -45,7 +45,8 @@
 | `ECOS_API_KEY` | ECOS 키 |
 | `TELEGRAM_BOT_TOKEN` | 봇 토큰 |
 | `TELEGRAM_CHAT_ID` | `@채널이름` 또는 숫자 |
-| `ANTHROPIC_API_KEY` | (선택) 기사 분석용 Claude API 키 |
+| `GEMINI_API_KEY` | (선택) 기사 분석용 Google Gemini 키 (무료 등급 가능) |
+| `ANTHROPIC_API_KEY` | (선택) Gemini 대신 Claude 를 쓸 때 |
 
 그다음 **Actions → 반도체 봇 → Run workflow** 에서 `mode` 를 `daily` 로 눌러 메시지가 오는지 확인합니다.
 이후는 자동입니다 (평일 06:55 · 12:30 · 18:10 KST 에 이어서 시작).
@@ -74,9 +75,11 @@ Docker: `docker build -t semi-bot .` 후 `docker run -d --restart unless-stopped
 
 ## 기사 요약·분석
 기사는 한 건에 메시지 한 통으로, 본문을 읽어 **내용**을 뽑아 보냅니다.
-**분석**은 `ANTHROPIC_API_KEY` 가 있을 때만 Claude 가 씁니다 (기사에 있는 내용만 근거로 업황·관련 종목에
-어떤 의미인지). 키가 없으면 분석 대신 **키워드**와 **관련 종목**만 보여줍니다.
-모델이 틀릴 수 있어 분석은 참고용입니다. 기사 본문 일부(3,000자 이내)가 Anthropic API 로 전송됩니다.
+**분석**은 `GEMINI_API_KEY`(무료 등급 가능) 또는 `ANTHROPIC_API_KEY` 가 있을 때만 AI 가 씁니다
+(기사에 있는 내용만 근거로 업황·관련 종목에 어떤 의미인지). Gemini 가 먼저고, 실패하면 Claude 를 씁니다.
+키가 없으면 분석 대신 **키워드**와 **관련 종목**만 보여줍니다. 모델이 틀릴 수 있어 분석은 참고용입니다.
+기사 본문 일부(3,000자 이내)가 해당 API 로 전송됩니다. Gemini 무료 등급은 입력이 서비스 개선에 쓰일 수 있습니다
+(공개 뉴스라 민감하지는 않습니다).
 
 ## 종목 바꾸기
 `bot/universe.json` 의 `rows` 에 `{"ticker": "005930", "name": "삼성전자"}` 형태로 넣거나 뺍니다.
