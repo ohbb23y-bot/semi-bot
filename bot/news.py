@@ -138,6 +138,14 @@ def seen_filter(items: list[dict], seen_titles: list[str], thresh: float = 0.45)
     return out
 
 
+def rank(items: list[dict], names: "set[str] | None" = None, min_score: int = 3) -> list[dict]:
+    """중요도 점수가 기준 이상인 기사를 점수 높은 순으로. 같은 소식 걸러내기는 하지 않는다."""
+    scored = [(score(x.get("title"), names), x.get("datetime") or "", x) for x in items]
+    scored = [t for t in scored if t[0] >= min_score]
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [x for _, _, x in scored]
+
+
 def pick(items: list[dict], n: int = 4, min_score: int = 3,
          names: "set[str] | None" = None) -> list[dict]:
     """중요한 기사만 최대 n 개. 같은 내용을 다룬 기사는 하나만 남긴다."""
@@ -155,3 +163,83 @@ def pick(items: list[dict], n: int = 4, min_score: int = 3,
         if len(out) >= n:
             break
     return out
+
+
+# ── 같은 사건 묶기 ─────────────────────────────────────────────
+# 제목이 다르게 달려도 같은 소식을 다룬 기사가 많다(한 사건을 열 개 매체가 쓴다). 제목 글자가 아니라
+# 제목·요약 소제목·본문 앞부분의 '단어 분포'가 얼마나 겹치는지로 같은 사건인지 본다.
+import math
+from collections import Counter
+
+_ALIAS = {"삼전": "삼성전자", "하이닉스": "SK하이닉스", "닉스": "SK하이닉스", "하닉": "SK하이닉스",
+          "SK하닉스": "SK하이닉스", "하닉스": "SK하이닉스", "삼전닉스": "삼성전자 SK하이닉스",
+          "코스피지수": "코스피"}
+_STOP = set("""반도체 전망 이번 올해 내년 관련 시장 기업 업체 수요 공급 증가 확대 실적 영향 가운데 대한 통해 위해
+오늘 어제 지난 최근 이후 이상 이하 대비 기준 최대 최소 속보 단독 종합 시황 핫종목 이시각 코주부 개장시황 그리고 하지만
+따르면 밝혔다 했다 한다 있다 된다 되는 이다 라고 에서 으로 에게 보다 까지 부터 처럼 만큼 정도 가량 사이 동안 한편 또한
+기자 연합뉴스 뉴스1 뉴시스 서울 지난달 이날 전날 이어 가장 매우 다시 모두 함께 현재 전체""".split())
+_PART = "은는이가을를의에도로과와"
+
+
+def story_tokens(text: str) -> list[str]:
+    out = []
+    for w in re.findall(r"[0-9A-Za-z가-힣%.]{2,}", html.unescape(text or "")):
+        w = w.strip(".")
+        if len(w) >= 3 and w[-1] in _PART and not w[-1].isdigit():
+            w = w[:-1]
+        w = _ALIAS.get(w, w)
+        for x in w.split():
+            if len(x) >= 2 and x not in _STOP:
+                out.append(x)
+    return out
+
+
+def story_sig(title: str, heads: list[str], body: str) -> dict[str, int]:
+    """기사의 단어 분포. 제목은 두 번 센다."""
+    text = (title + " ") * 2 + " ".join(heads) + " " + (body or "")[:400]
+    return dict(Counter(story_tokens(text)))
+
+
+def _vec(sig: dict[str, int]) -> dict[str, float]:
+    return {t: 1 + math.log(c) for t, c in sig.items()}
+
+
+def story_cos(a: dict[str, int], b: dict[str, int]) -> float:
+    va, vb = _vec(a), _vec(b)
+    num = sum(va[t] * vb[t] for t in va.keys() & vb.keys())
+    da = math.sqrt(sum(x * x for x in va.values()))
+    db = math.sqrt(sum(x * x for x in vb.values()))
+    return num / (da * db) if da and db else 0.0
+
+
+def cluster(items: list[dict], thr: float = 0.30) -> list[list[dict]]:
+    """같은 사건끼리 묶는다. items 는 중요한 순으로 정렬돼 있고, 각 묶음의 첫 기사가 대표다."""
+    groups: list[list[dict]] = []
+    for n in items:
+        best, bs = None, 0.0
+        for g in groups:
+            s = max(story_cos(n["sig"], m["sig"]) for m in g)
+            if s > bs:
+                best, bs = g, s
+        if best is not None and bs >= thr:
+            best.append(n)
+        else:
+            groups.append([n])
+    return groups
+
+
+def sig_keep(sig: dict[str, int], k: int = 30) -> list[str]:
+    """상태 파일에 남길 요약: 많이 나온 단어 k 개."""
+    return [t for t, _ in Counter(sig).most_common(k)]
+
+
+def seen_story(sig: dict[str, int], stored: list, thr: float = 0.22) -> bool:
+    """이미 보낸 소식과 같은 사건인가. stored 는 sig_keep 목록의 목록(단어 집합끼리 비교)."""
+    a = set(sig_keep(sig))
+    if not a:
+        return False
+    for ent in stored or []:
+        b = set(ent.get("w") or ent) if isinstance(ent, dict) else set(ent)
+        if b and len(a & b) / math.sqrt(len(a) * len(b)) >= thr:
+            return True
+    return False

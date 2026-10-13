@@ -72,5 +72,8 @@ def article_block(n: dict, info: dict | None = None) -> str:
         parts.append("<b>📌 관련</b>  " + " · ".join(esc(t) for t in info["related"]))
 
     press = esc(n.get("press") or "")
-    parts.append((f"<i>{press}</i> · " if press else "") + link(n["url"], "기사 원문"))
+    foot = (f"<i>{press}</i> · " if press else "") + link(n["url"], "기사 원문")
+    if info.get("also"):                                    # 같은 소식을 다룬 다른 매체
+        foot += "\n<i>함께 보도: " + " · ".join(esc(x) for x in info["also"]) + "</i>"
+    parts.append(foot)
     return "\n\n".join(parts)

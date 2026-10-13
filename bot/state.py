@@ -22,17 +22,20 @@ KEEP = 3000              # 최근 접수번호를 이만큼 기억한다 (며칠
 def load() -> dict:
     if not STATE_PATH.exists():
         return {"last_rcept_no": "", "seen": [], "last_run": "",
-                "last_daily": "", "pending": {}}
+                "last_daily": "", "pending": {},
+                "news_sigs": []}
     try:
         d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except Exception:                                  # noqa: BLE001
         return {"last_rcept_no": "", "seen": [], "last_run": "",
-                "last_daily": "", "pending": {}}
+                "last_daily": "", "pending": {},
+                "news_sigs": []}
     d.setdefault("seen", [])
     d.setdefault("last_rcept_no", "")
     d.setdefault("last_run", "")
     d.setdefault("last_daily", "")
     d.setdefault("pending", {})
+    d.setdefault("news_sigs", [])
     return d
 
 

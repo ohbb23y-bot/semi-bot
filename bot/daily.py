@@ -118,9 +118,10 @@ def run(dry: bool = False) -> int:
     # 낮에 30분 감시가 이미 보낸 기사는 다시 보내지 않는다
     pool = news.seen_filter(pool, list(st.get("news_seen") or []))
     names = set(universe().values())
-    arts = news.pick(pool, 4, names=names)
-    for n in arts:
-        n["info"] = analyst.enrich(n, names)
+    groups = analyst.stories(pool, names, analyst.live_sigs(st), 4)
+    for g in groups:
+        g[0]["info"] = analyst.enrich(g[0], names, others=g[1:])
+    arts = [g[0] for g in groups]
 
     blocks = build(b, mac, arts)
     if dry:
@@ -131,6 +132,7 @@ def run(dry: bool = False) -> int:
     st = state.load()
     st["last_daily"] = today
     st["news_seen"] = (list(st.get("news_seen") or []) + [n["title"] for n in arts])[-400:]
+    analyst.record_stories(st, groups)
     state.save(st)
     print(f"데일리 전송 완료 (메시지 {sent}개)")
     return 0

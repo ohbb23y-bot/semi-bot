@@ -211,13 +211,16 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
     # ── 기사 ────────────────────────────────────────────────
     arts: list[dict] = []
     pool: list[dict] = []
+    groups: list[list[dict]] = []
     if not a.no_news:
         pool = news.seen_filter(news.fresh(news.sector(limit=40), NEWS_WITHIN_MIN),
                                 list(st.get("news_seen") or []))
         names = set(universe().values())
-        arts = news.pick(pool, NEWS_MAX, names=names)
-        for n in arts:                   # 본문을 읽어 내용·분석을 붙인다
-            n["info"] = analyst.enrich(n, names)
+        # 같은 사건은 한 번만: 이미 보낸 사건은 빼고, 남은 것은 사건 단위로 묶어 대표 한 건에 정리한다
+        groups = analyst.stories(pool, names, analyst.live_sigs(st), NEWS_MAX)
+        for g in groups:
+            g[0]["info"] = analyst.enrich(g[0], names, others=g[1:])
+        arts = [g[0] for g in groups]
 
     msgs = build(trimmed, arts)
 
@@ -248,6 +251,8 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
             time.sleep(telegram.GAP)
     finally:
         _remember(st, pool)         # 후보로 올랐던 기사는 한 번만 심사한다
+        if sent:
+            analyst.record_stories(st, groups)   # 보낸 사건은 다시 보내지 않는다
         state.save(st)
 
     print(f"공시 {len(trimmed)}건 · 기사 {len(arts)}건 · 메시지 {sent}개 전송")
