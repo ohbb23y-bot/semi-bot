@@ -23,19 +23,20 @@ def load() -> dict:
     if not STATE_PATH.exists():
         return {"last_rcept_no": "", "seen": [], "last_run": "",
                 "last_daily": "", "pending": {},
-                "news_sigs": []}
+                "news_sigs": [], "news_sent": []}
     try:
         d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except Exception:                                  # noqa: BLE001
         return {"last_rcept_no": "", "seen": [], "last_run": "",
                 "last_daily": "", "pending": {},
-                "news_sigs": []}
+                "news_sigs": [], "news_sent": []}
     d.setdefault("seen", [])
     d.setdefault("last_rcept_no", "")
     d.setdefault("last_run", "")
     d.setdefault("last_daily", "")
     d.setdefault("pending", {})
     d.setdefault("news_sigs", [])
+    d.setdefault("news_sent", [])
     return d
 
 

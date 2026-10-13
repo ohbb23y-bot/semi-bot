@@ -118,7 +118,8 @@ def run(dry: bool = False) -> int:
     # 낮에 30분 감시가 이미 보낸 기사는 다시 보내지 않는다
     pool = news.seen_filter(pool, list(st.get("news_seen") or []))
     names = set(universe().values())
-    groups = analyst.stories(pool, names, analyst.live_sigs(st), 4)
+    groups = analyst.stories(pool, names, analyst.live_sigs(st), 4,
+                             sent=analyst.live_sent(st))
     for g in groups:
         g[0]["info"] = analyst.enrich(g[0], names, others=g[1:])
     arts = [g[0] for g in groups]

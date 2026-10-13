@@ -418,21 +418,119 @@ def enrich(n: dict, names: set[str], others: "list[dict] | None" = None) -> dict
     return info
 
 
+def _ask(prompt: str) -> str | None:
+    """키가 있는 AI 에게 묻고 글 답을 돌려준다. Gemini 먼저, 없거나 실패하면 Claude. 둘 다 없으면 None."""
+    gkey = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if gkey:
+        url = f"{GEMINI_API}/{GEMINI_MODEL}:generateContent"
+        headers = {"x-goog-api-key": gkey, "content-type": "application/json"}
+        cfg = {"temperature": 0.0, "maxOutputTokens": 800, "responseMimeType": "application/json"}
+        for thinking_off in (True, False):
+            c = dict(cfg)
+            if thinking_off:
+                c["thinkingConfig"] = {"thinkingBudget": 0}
+            try:
+                r = client("gemini").post(
+                    url, headers=headers, timeout=40,
+                    json={"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": c})
+                if r.status_code == 400 and thinking_off:
+                    continue
+                if r.status_code >= 400:
+                    print(f"[묶기] Gemini {r.status_code}: {r.text[:120]!r}", flush=True)
+                r.raise_for_status()
+                parts = (r.json().get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+                text = "".join(p.get("text", "") for p in parts)
+                if text.strip():
+                    return text
+            except Exception as exc:                           # noqa: BLE001
+                print(f"[묶기] Gemini 호출 실패: {type(exc).__name__}", flush=True)
+            break
+    ckey = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+    if ckey:
+        try:
+            r = client("anthropic").post(
+                API, headers={"x-api-key": ckey, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                json={"model": MODEL, "max_tokens": 800, "messages": [{"role": "user", "content": prompt}]}, timeout=40)
+            r.raise_for_status()
+            return "".join(b.get("text", "") for b in r.json().get("content") or [])
+        except Exception:                                      # noqa: BLE001
+            return None
+    return None
+
+
+def _one_line(n: dict) -> str:
+    a = n.get("art") or {}
+    title = a.get("title") or n.get("title") or ""
+    heads = " / ".join((a.get("summary") or [])[:2])
+    return f"{title}" + (f"  — {heads[:100]}" if heads else "")
+
+
+def judge_events(cands: list[dict], sent: list[dict]) -> "dict[int, tuple[int, int]] | None":
+    """AI 가 같은 사건인지 판단한다. {후보 번호: (이미 보낸 소식 번호 또는 0, 묶음 번호)}.
+
+    '같은 사건'은 같은 발표·사고·시장 충격을 다룬 기사다. 시황·종목·전망처럼 관점이 달라도 같다.
+    키가 없거나 답이 이상하면 None 을 돌려주고, 호출부가 단어 비교로 대신한다.
+    """
+    if not cands:
+        return {}
+    s_lines = "\n".join(f"S{i}. {x.get('title', '')}" + (f"  — {x['heads']}" if x.get("heads") else "")
+                        for i, x in enumerate(sent[:24], 1)) or "(없음)"
+    c_lines = "\n".join(f"{i}. ({(n.get('press') or '')[:8]}) {_one_line(n)}" for i, n in enumerate(cands, 1))
+    prompt = (
+        "너는 반도체 뉴스 채널 편집자다. 독자는 같은 소식이 되풀이되는 것을 매우 싫어한다.\n\n"
+        f"[이미 채널에 보낸 소식]\n{s_lines}\n\n[새 기사 후보]\n{c_lines}\n\n"
+        "각 후보 기사에 대해 판단해 JSON 으로만 답하라.\n"
+        '{"items": [{"id": 1, "same_as_sent": 0, "group": 1}, ...]}\n'
+        "- same_as_sent: 이미 보낸 소식과 같은 사건이면 그 번호(S 뒤의 숫자), 아니면 0.\n"
+        "- group: 새 기사 후보끼리 같은 사건이면 같은 숫자를 준다 (1부터, 다른 사건이면 다른 숫자).\n\n"
+        "'같은 사건'의 기준: 같은 발표·사고·시장 충격을 다룬 기사는 시황, 개별 종목, 전망처럼 관점이 달라도 "
+        "같은 사건이다. 예) 중국발 충격으로 반도체주가 급락한 사태를 다룬 기사들은 모두 같은 사건이다. "
+        "같은 행사를 다룬 기사도 같은 사건이다. 다만 기업이 새로 밝힌 별개의 사실(수주, 실적, 신제품, 인수)은 "
+        "다른 사건이다.\n모든 후보의 id 를 빠짐없이 포함하라."
+    )
+    text = _ask(prompt)
+    if not text:
+        return None
+    try:
+        m = re.search(r"\{.*\}", text, re.S)
+        items = json.loads(m.group(0)).get("items") or []
+        out = {int(x["id"]): (int(x.get("same_as_sent") or 0), int(x.get("group") or 0)) for x in items}
+    except Exception:                                          # noqa: BLE001
+        print("[묶기] AI 답을 읽지 못했습니다.", flush=True)
+        return None
+    if set(out) != set(range(1, len(cands) + 1)):
+        print("[묶기] AI 답에 빠진 기사가 있습니다.", flush=True)
+        return None
+    return out
+
+
 def stories(pool: list[dict], names: set[str], seen_sigs: list, n_max: int = 4,
-            min_score: int = 3, thr: float = 0.26) -> list[list[dict]]:
+            min_score: int = 3, thr: float = 0.26, sent: "list[dict] | None" = None) -> list[list[dict]]:
     """중요한 기사를 사건 단위로 묶어 최대 n_max 묶음을 돌려준다. 묶음의 첫 기사가 대표다.
 
-    1) 점수 높은 순으로 후보를 뽑아 본문을 읽고 단어 분포를 만든다.
-    2) 이미 보낸 사건과 같은 것은 뺀다 (그 사건의 다른 매체 기사가 뒤늦게 올라와도 다시 보내지 않는다).
-    3) 남은 것 중 같은 사건끼리 묶는다.
+    1) 점수 높은 순으로 후보를 뽑아 본문을 읽는다.
+    2) AI 키가 있으면 AI 가 '이미 보낸 사건과 같은가', '후보끼리 같은 사건인가'를 판단한다.
+       단어 비교는 관점이 다른 같은 사건(시황·종목·전망)을 못 가르기 때문이다.
+    3) 키가 없거나 AI 가 실패하면 단어 분포 비교로 대신한다.
     """
     cands = news.rank(pool, names, min_score)[:12]
     for n in cands:
         n["art"] = fetch_article(n.get("url") or "")
         a = n["art"]
         n["sig"] = news.story_sig(a["title"] or n.get("title") or "", a["summary"], a["body"])
-    fresh = [n for n in cands if not news.seen_story(n["sig"], seen_sigs)]
-    return news.cluster(fresh, thr)[:n_max]
+    fresh = [n for n in cands if not news.seen_story(n["sig"], seen_sigs)]     # 단어 비교로 1차 거름
+    if not fresh:
+        return []
+    verdict = judge_events(fresh, sent or [])
+    if verdict is None:                                                     # AI 를 못 썼다
+        return news.cluster(fresh, thr)[:n_max]
+    groups: dict[int, list[dict]] = {}
+    for i, n in enumerate(fresh, 1):
+        dup, grp = verdict[i]
+        if dup:                                                             # 이미 보낸 사건
+            continue
+        groups.setdefault(grp or 1000 + i, []).append(n)
+    return list(groups.values())[:n_max]
 
 
 def live_sigs(st: dict, hours: int = 36) -> list:
@@ -449,3 +547,17 @@ def record_stories(st: dict, groups: list[list[dict]], hours: int = 36, cap: int
             if m.get("sig"):
                 keep.append({"t": now, "w": news.sig_keep(m["sig"])})
     st["news_sigs"] = keep[-cap:]
+    # AI 가 '이미 보낸 소식과 같은 사건인가' 를 판단할 수 있도록 제목도 남긴다
+    sent = [e for e in st.get("news_sent") or [] if now - e.get("t", 0) < hours * 3600]
+    for g in groups:
+        for m in g:
+            a = m.get("art") or {}
+            sent.append({"t": now, "title": (a.get("title") or m.get("title") or "")[:90],
+                         "heads": " / ".join((a.get("summary") or [])[:2])[:100]})
+    st["news_sent"] = sent[-40:]
+
+
+def live_sent(st: dict, hours: int = 36) -> list:
+    now = time.time()
+    sent = [e for e in st.get("news_sent") or [] if now - e.get("t", 0) < hours * 3600]
+    return list(reversed(sent))                  # 최근 것부터

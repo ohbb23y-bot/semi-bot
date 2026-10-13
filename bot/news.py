@@ -140,7 +140,10 @@ def seen_filter(items: list[dict], seen_titles: list[str], thresh: float = 0.45)
 
 def rank(items: list[dict], names: "set[str] | None" = None, min_score: int = 3) -> list[dict]:
     """중요도 점수가 기준 이상인 기사를 점수 높은 순으로. 같은 소식 걸러내기는 하지 않는다."""
-    scored = [(score(x.get("title"), names), x.get("datetime") or "", x) for x in items]
+    # 종목 이름이 나온다는 이유만으로 통과하면 '협력사 커피차' 같은 홍보 기사가 섞인다.
+    # 업황·실적·수주 같은 키워드 점수가 따로 2점은 있어야 한다.
+    scored = [(score(x.get("title"), names), x.get("datetime") or "", x) for x in items
+              if score(x.get("title"), None) >= 2]
     scored = [t for t in scored if t[0] >= min_score]
     scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return [x for _, _, x in scored]

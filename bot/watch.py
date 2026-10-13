@@ -217,7 +217,8 @@ def run_once(a: argparse.Namespace, st: dict) -> int:
                                 list(st.get("news_seen") or []))
         names = set(universe().values())
         # 같은 사건은 한 번만: 이미 보낸 사건은 빼고, 남은 것은 사건 단위로 묶어 대표 한 건에 정리한다
-        groups = analyst.stories(pool, names, analyst.live_sigs(st), NEWS_MAX)
+        groups = analyst.stories(pool, names, analyst.live_sigs(st), NEWS_MAX,
+                                 sent=analyst.live_sent(st))
         for g in groups:
             g[0]["info"] = analyst.enrich(g[0], names, others=g[1:])
         arts = [g[0] for g in groups]
